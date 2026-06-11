@@ -2,8 +2,8 @@
 # =============================================================================
 # 02_setup_environment.sh
 # Run this INSIDE the microcloud-demo VM.
-# Sets up LXD, storage, networking, and 4 micro VMs ready for snap installs
-# and microcloud init as part of a live demo.
+# Sets up LXD, storage, networking, 4 micro VMs, installs all required snaps,
+# and configures each VM so the only remaining step is microcloud init.
 # =============================================================================
 
 set -e
@@ -38,9 +38,8 @@ lxc storage volume create disks remote3 --type block size=20GiB
 echo "==> Creating MicroCloud uplink bridge network..."
 lxc network create microbr0
 
-echo "==> Bridge network addresses (save these for microcloud init):"
-echo "    IPv4: $(lxc network get microbr0 ipv4.address)"
-echo "    IPv6: $(lxc network get microbr0 ipv6.address)"
+IPV4=$(lxc network get microbr0 ipv4.address)
+IPV6=$(lxc network get microbr0 ipv6.address)
 
 # --- VMs ---
 echo "==> Creating micro VMs (first one downloads the Ubuntu image, be patient)..."
@@ -88,7 +87,7 @@ done
 echo "==> Configuring MicroCloud network interface on each VM..."
 
 for vm in micro1 micro2 micro3 micro4; do
-  echo "    Configuring $vm..."
+  echo "    Configuring netplan on $vm..."
   lxc exec $vm -- bash -c "cat > /etc/netplan/99-microcloud.yaml << 'NETPLAN'
 network:
     version: 2
@@ -102,7 +101,22 @@ chmod 0600 /etc/netplan/99-microcloud.yaml
 netplan apply"
 done
 
-echo "==> Netplan configured on all VMs!"
+# --- Install snaps and run lxd init on each VM ---
+echo "==> Installing MicroCloud snaps on all 4 VMs (runs in parallel)..."
+
+for vm in micro1 micro2 micro3 micro4; do
+  echo "    Installing snaps on $vm..."
+  lxc exec $vm -- bash -c "
+    snap install microcloud --channel 2/stable
+    snap install microceph --channel squid/stable
+    snap install microovn --channel 24.03/stable
+    lxd init --minimal
+  " &
+done
+
+echo "==> Waiting for all snap installs to complete (this takes a few minutes)..."
+wait
+echo "==> All snaps installed and LXD initialised on all VMs!"
 
 # --- Final status ---
 echo ""
@@ -112,16 +126,14 @@ echo "============================================================"
 echo ""
 lxc list
 echo ""
-echo "microbr0 addresses (needed during microcloud init):"
-echo "    IPv4: $(lxc network get microbr0 ipv4.address)"
-echo "    IPv6: $(lxc network get microbr0 ipv6.address)"
+echo "microbr0 network addresses:"
+echo "    IPv4: $IPV4"
+echo "    IPv6: $IPV6"
 echo ""
-echo "Next step — on each VM (micro1 through micro4), install the snaps:"
-echo "    snap install microcloud --channel 2/stable"
-echo "    snap install microceph --channel squid/stable"
-echo "    snap install microovn --channel 24.03/stable"
+echo "You will need these during microcloud init when asked to"
+echo "configure the uplink network. Note them down now."
 echo ""
-echo "Then on each VM, initialise LXD:"
-echo "    lxd init --minimal"
-echo ""
-echo "Then run microcloud init on micro1 to bootstrap the cluster."
+echo "Next step:"
+echo "    lxc exec micro1 -- bash"
+echo "    microcloud init"
+echo "============================================================"
