@@ -1,20 +1,22 @@
 #!/bin/bash
 # =============================================================================
-# 02_setup_environment.sh
-# Run this INSIDE the microcloud-demo VM.
-# Sets up LXD, storage, networking, 4 micro VMs, installs all required snaps,
-# and configures each VM so the only remaining step is microcloud init.
+# 01_create_environment.sh
+# Run this on YOUR LAPTOP.
+# Creates a dedicated LXD project and provisions 4 micro VMs directly on your
+# machine, ready for snap installs and microcloud init.
 # =============================================================================
 
 set -e
 
-# --- Install LXD ---
-echo "==> Installing LXD..."
-snap install lxd
 export PATH=$PATH:/snap/bin
 
-echo "==> Initialising LXD with minimal defaults..."
-lxd init --minimal
+PROJECT="microcloud-demo"
+
+echo "==> Creating LXD project: $PROJECT..."
+lxc project create $PROJECT -c features.images=false -c features.profiles=false
+
+echo "==> Switching to project $PROJECT..."
+lxc project switch $PROJECT
 
 # --- Storage ---
 echo "==> Creating ZFS storage pool (100GiB)..."
@@ -36,10 +38,10 @@ lxc storage volume create disks remote3 --type block size=20GiB
 
 # --- Networking ---
 echo "==> Creating MicroCloud uplink bridge network..."
-lxc network create microbr0
+lxc network create microbr0 --project $PROJECT
 
-IPV4=$(lxc network get microbr0 ipv4.address)
-IPV6=$(lxc network get microbr0 ipv6.address)
+IPV4=$(lxc network get microbr0 ipv4.address --project $PROJECT)
+IPV6=$(lxc network get microbr0 ipv6.address --project $PROJECT)
 
 # --- VMs ---
 echo "==> Creating micro VMs (first one downloads the Ubuntu image, be patient)..."
@@ -79,6 +81,9 @@ for vm in micro1 micro2 micro3 micro4; do
       echo "    $vm is ready!"
       break
     fi
+    if [ $i -eq 24 ]; then
+      echo "    WARNING: $vm may not be ready, check manually before continuing"
+    fi
     sleep 5
   done
 done
@@ -101,7 +106,9 @@ chmod 0600 /etc/netplan/99-microcloud.yaml
 netplan apply"
 done
 
-# --- Install snaps and run lxd init on each VM ---
+# --- Install snaps on each VM ---
+# MicroCloud needs LXD installed and running but NOT initialized.
+# Do NOT run lxd init here — microcloud init handles that.
 echo "==> Installing MicroCloud snaps on all 4 VMs (runs in parallel)..."
 
 for vm in micro1 micro2 micro3 micro4; do
@@ -110,13 +117,31 @@ for vm in micro1 micro2 micro3 micro4; do
     snap install microcloud --channel 2/stable
     snap install microceph --channel squid/stable
     snap install microovn --channel 24.03/stable
-    lxd init --minimal
   " &
 done
 
-echo "==> Waiting for all snap installs to complete (this takes a few minutes)..."
+echo "==> Waiting for snap installs to complete (this takes a few minutes)..."
 wait
-echo "==> All snaps installed and LXD initialised on all VMs!"
+echo "==> Snaps installed on all VMs!"
+
+# --- Wait for LXD daemon to be ready on each VM ---
+# snap install returns before the LXD daemon is ready.
+# Poll until it responds so microcloud init doesn't timeout.
+echo "==> Waiting for LXD daemon to be ready on each VM..."
+
+for vm in micro1 micro2 micro3 micro4; do
+  echo "    Waiting for LXD on $vm..."
+  for i in $(seq 1 24); do
+    if lxc exec $vm -- lxc list > /dev/null 2>&1; then
+      echo "    LXD ready on $vm!"
+      break
+    fi
+    if [ $i -eq 24 ]; then
+      echo "    WARNING: LXD on $vm may not be ready, check manually before continuing"
+    fi
+    sleep 5
+  done
+done
 
 # --- Final status ---
 echo ""
@@ -133,7 +158,11 @@ echo ""
 echo "You will need these during microcloud init when asked to"
 echo "configure the uplink network. Note them down now."
 echo ""
-echo "Next step:"
+echo "Next step — shell into micro1 and bootstrap the cluster:"
 echo "    lxc exec micro1 -- bash"
 echo "    microcloud init"
+echo ""
+echo "The LXD UI will be accessible at:"
+echo "    https://$(echo $IPV4 | cut -d'/' -f1 | sed 's/\.1$/.116/'):8443"
+echo "    (exact IP may vary — check lxc list for micro1's address)"
 echo "============================================================"
