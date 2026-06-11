@@ -84,6 +84,26 @@ for vm in micro1 micro2 micro3 micro4; do
   done
 done
 
+# --- Configure netplan on each VM ---
+echo "==> Configuring MicroCloud network interface on each VM..."
+
+for vm in micro1 micro2 micro3 micro4; do
+  echo "    Configuring $vm..."
+  lxc exec $vm -- bash -c "cat > /etc/netplan/99-microcloud.yaml << 'NETPLAN'
+network:
+    version: 2
+    ethernets:
+        enp6s0:
+            accept-ra: false
+            dhcp4: false
+            link-local: []
+NETPLAN
+chmod 0600 /etc/netplan/99-microcloud.yaml
+netplan apply"
+done
+
+echo "==> Netplan configured on all VMs!"
+
 # --- Final status ---
 echo ""
 echo "============================================================"
@@ -101,4 +121,4 @@ echo "    snap install microcloud --channel 2/stable"
 echo "    snap install microceph --channel squid/stable"
 echo "    snap install microovn --channel 24.03/stable"
 echo ""
-echo "Then configure netplan on each VM and run microcloud init on micro1."
+echo "Then run microcloud init on micro1 to bootstrap the cluster."
